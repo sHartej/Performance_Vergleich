@@ -19,12 +19,7 @@ def load_data():
 
     bench_data = yf.download(benchmarks, start="2019-01-01", end= "2026-01-01")
 
-    # print(data["Close"])
-    # print(bench_data["Close"])
     return data, bench_data
-
-#Calculate daily returns
-
 
 def daily_returns_tickers(data):
     return data["Close"].pct_change().dropna()
