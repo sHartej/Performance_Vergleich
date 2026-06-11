@@ -1,80 +1,93 @@
 import pandas as pd
 import numpy as np
 
-def sharpe_ratio(daily_returns):
-   risk_free_daily = 0.04/252 # 
-   rendite = daily_returns.mean()
-   volatility = daily_returns.std()
+from config import RISK_FREE, TRADING_DAYS
 
-   sharpe = ((rendite - risk_free_daily)/volatility) * 252**0.5
 
-   return sharpe
+def sharpe_ratio(daily_returns, risk_free=RISK_FREE):
+    risk_free_daily = risk_free / TRADING_DAYS
+    rendite = daily_returns.mean()
+    volatility = daily_returns.std()
 
-def sortino_ratio(daily_returns_sortino):
+    sharpe = ((rendite - risk_free_daily) / volatility) * TRADING_DAYS ** 0.5
 
-   downside = daily_returns_sortino[daily_returns_sortino < 0]
-   risk_free_daily = 0.04/252
-   rendite = daily_returns_sortino.mean()
-   volatility = downside.std()
+    return sharpe
 
-   sortino = ((rendite - risk_free_daily)/volatility) * 252**0.5
 
-   return sortino
+def sortino_ratio(daily_returns_sortino, risk_free=RISK_FREE):
+    risk_free_daily = risk_free / TRADING_DAYS
+    rendite = daily_returns_sortino.mean()
+    # Abwaerts-Volatilitaet: nur negative Renditen
+    downside = daily_returns_sortino[daily_returns_sortino < 0]
+    volatility = downside.std()
+
+    sortino = ((rendite - risk_free_daily) / volatility) * TRADING_DAYS ** 0.5
+
+    return sortino
+
 
 def calculate_beta(data_funds, benchmark_funds):
-   
-   results = {}
-   for funds in data_funds.columns:
-      results[funds] = {}
-      for benchmark in benchmark_funds.columns:
-         kovarianz = np.cov(data_funds[funds], benchmark_funds[benchmark])[0,1]
-         varianz = np.var(benchmark_funds[benchmark])
+    results = {}
+    for fund in data_funds.columns:
+        results[fund] = {}
+        for benchmark in benchmark_funds.columns:
+            # Gemeinsame Tage verwenden, damit cov/var konsistent sind
+            paired = pd.concat(
+                [data_funds[fund], benchmark_funds[benchmark]], axis=1
+            ).dropna()
+            kovarianz = np.cov(paired.iloc[:, 0], paired.iloc[:, 1])[0, 1]
+            # ddof=1 (Stichprobe) passend zu np.cov
+            varianz = np.var(paired.iloc[:, 1], ddof=1)
 
-         results[funds][benchmark] = kovarianz/varianz
+            results[fund][benchmark] = kovarianz / varianz
 
-   return results
+    return results
 
-def calculate_alpha(data_funds_a, benchmark_funds_a):
 
-   results = {}
-   betas = calculate_beta(data_funds_a, benchmark_funds_a)
+def calculate_alpha(data_funds_a, benchmark_funds_a, risk_free=RISK_FREE):
+    results = {}
+    betas = calculate_beta(data_funds_a, benchmark_funds_a)
 
-   for fund in data_funds_a.columns:
-      results[fund] = {}
-      for bench in benchmark_funds_a.columns:
-         rendite = data_funds_a[fund].mean() * 252
-         rendite_bench = benchmark_funds_a[bench].mean() * 252
-         beta = betas[fund][bench]
-         alpha = rendite - (0.04 + beta * (rendite_bench - 0.04))
+    for fund in data_funds_a.columns:
+        results[fund] = {}
+        for bench in benchmark_funds_a.columns:
+            rendite = data_funds_a[fund].mean() * TRADING_DAYS
+            rendite_bench = benchmark_funds_a[bench].mean() * TRADING_DAYS
+            beta = betas[fund][bench]
+            alpha = rendite - (risk_free + beta * (rendite_bench - risk_free))
 
-         results[fund][bench] = alpha
+            results[fund][bench] = alpha
 
-   return results
+    return results
+
 
 def calculate_max_drawdown(data_fund_md):
-   
-   cumulative = (1 + data_fund_md).cumprod()
-   rolling_max = cumulative.cummax()
-   drawdown = ((cumulative - rolling_max) / rolling_max) * 100
+    cumulative = (1 + data_fund_md).cumprod()
+    rolling_max = cumulative.cummax()
+    drawdown = ((cumulative - rolling_max) / rolling_max) * 100
 
-   max_drawdown = drawdown.min()
+    max_drawdown = drawdown.min()
 
-   return max_drawdown
+    return max_drawdown
+
 
 def calculate_recovery_period(data_fund_md):
     results = {}
-    
+
     for fund in data_fund_md.columns:
         cumulative = (1 + data_fund_md[fund]).cumprod()
         rolling_max = cumulative.cummax()
         drawdown = (cumulative - rolling_max) / rolling_max
-        
+
         trough_date = drawdown.idxmin()
-        recovery_date = cumulative[trough_date:][cumulative[trough_date:] >= rolling_max[trough_date]].first_valid_index()
-        
+        after_trough = cumulative[trough_date:]
+        recovery_date = after_trough[
+            after_trough >= rolling_max[trough_date]
+        ].first_valid_index()
+
         if recovery_date is None:
-            results[fund] = "Not recovered"
+            results[fund] = "Nicht erholt"
         else:
             results[fund] = (recovery_date - trough_date).days
-    
+
     return results
