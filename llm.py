@@ -11,9 +11,10 @@ https://aistudio.google.com/apikey erhaeltlich (kein Zahlungsmittel noetig).
 """
 
 import os
+import time
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 from config import PRODUCTS, METRIC_INFO
 
@@ -23,8 +24,12 @@ from config import PRODUCTS, METRIC_INFO
 # "gemini-1.5-flash".
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
+# Bei Ueberlastung (503) oder Rate-Limit (429) werden diese Modelle der Reihe
+# nach probiert.
+FALLBACK_MODELS = [MODEL, "gemini-2.0-flash", "gemini-flash-latest"]
+
 SYSTEM_INSTRUCTIONS = (
-    "Du bist ein nuechterner Finanzanalyst. Du vergleichst zwei aktiv und zwei "
+    "Du bist ein Finanzanalyst. Du vergleichst zwei aktiv und zwei "
     "passiv gemanagte Anlageprodukte anhand bereitgestellter Kennzahlen. "
     "Beziehe dich ausschliesslich auf die im Kontext gelieferten Zahlen und "
     "erfinde keine Werte. Wenn eine Information fehlt, sage das. Arbeite den "
@@ -85,33 +90,67 @@ def _client(api_key=None):
 
 
 def _config(context, max_tokens):
-    """GenerateContentConfig mit System-Instruktion + Kennzahlen-Kontext."""
+    """GenerateContentConfig mit System-Instruktion + Kennzahlen-Kontext.
+
+    thinking_budget=0 deaktiviert das interne "Denken" von Gemini 2.5 -
+    dessen Tokens zaehlen sonst gegen max_output_tokens und schneiden die
+    sichtbare Antwort mitten im Satz ab.
+    """
     return types.GenerateContentConfig(
         system_instruction=SYSTEM_INSTRUCTIONS + "\n\n" + context,
         max_output_tokens=max_tokens,
         temperature=0.3,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
     )
 
 
-def stream_analysis(results, benchmark, api_key="AQ.Ab8RN6KqEuk9Br5Feo97uO3Im4JU6k0mb0Zghw2wzgYjNOjT9w"):
+def _stream_with_fallback(client, contents, config):
+    """Streamt mit automatischem Retry und Modell-Fallback bei 503/429.
+
+    Probiert jedes Modell aus FALLBACK_MODELS bis zu zweimal (mit kurzer
+    Wartezeit), bevor das naechste versucht wird. Erst wenn alle scheitern,
+    wird der letzte Fehler geworfen.
+    """
+    last_error = None
+    for model in FALLBACK_MODELS:
+        for delay in (0, 4):
+            if delay:
+                time.sleep(delay)
+            try:
+                stream = client.models.generate_content_stream(
+                    model=model, contents=contents, config=config
+                )
+                iterator = iter(stream)
+                first = next(iterator, None)  # loest den Request aus
+            except errors.APIError as exc:
+                if exc.code in (429, 503):
+                    last_error = exc
+                    continue
+                raise
+            if first is not None and first.text:
+                yield first.text
+            for chunk in iterator:
+                if chunk.text:
+                    yield chunk.text
+            return
+    raise last_error
+
+
+def stream_analysis(results, benchmark, api_key=None):
     """Generator: streamt die automatische Aktiv-vs-Passiv-Analyse als Text."""
     client = _client(api_key)
-    config = _config(build_context(results, benchmark), max_tokens=2000)
-    for chunk in client.models.generate_content_stream(
-        model=MODEL, contents=ANALYSIS_PROMPT, config=config
-    ):
-        if chunk.text:
-            yield chunk.text
+    config = _config(build_context(results, benchmark), max_tokens=8192)
+    yield from _stream_with_fallback(client, ANALYSIS_PROMPT, config)
 
 
-def stream_chat(results, benchmark, history, api_key="AQ.Ab8RN6KqEuk9Br5Feo97uO3Im4JU6k0mb0Zghw2wzgYjNOjT9w"):
+def stream_chat(results, benchmark, history, api_key=None):
     """Generator: streamt die Antwort auf eine Nutzerfrage (Chat).
 
     history: Liste von {"role": "user"|"assistant", "content": str}.
     Gemini erwartet die Rolle "model" statt "assistant".
     """
     client = _client(api_key)
-    config = _config(build_context(results, benchmark), max_tokens=1500)
+    config = _config(build_context(results, benchmark), max_tokens=4096)
     contents = [
         {
             "role": "model" if m["role"] == "assistant" else "user",
@@ -119,8 +158,4 @@ def stream_chat(results, benchmark, history, api_key="AQ.Ab8RN6KqEuk9Br5Feo97uO3
         }
         for m in history
     ]
-    for chunk in client.models.generate_content_stream(
-        model=MODEL, contents=contents, config=config
-    ):
-        if chunk.text:
-            yield chunk.text
+    yield from _stream_with_fallback(client, contents, config)

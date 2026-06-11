@@ -31,12 +31,26 @@ uv run python main.py
 ```
 
 ### Gemini-API-Key setzen (fuer KI-Analyse & Chat)
-1. Kostenlosen Key holen: https://aistudio.google.com/apikey (kein Zahlungsmittel noetig)
+**Jedes Teammitglied braucht einen eigenen (kostenlosen) Key** – der Key wird
+nie ins Repository committet, sondern nur lokal als Umgebungsvariable gesetzt.
+
+1. Kostenlosen Key holen: https://aistudio.google.com/apikey (kein
+   Zahlungsmittel noetig). Auf der Seite **"API-Schluessel erstellen"** klicken
+   und den Key ueber das **Kopier-Symbol** in der Tabelle kopieren.
 2. Entweder im Dashboard in die Seitenleiste eingeben, **oder** dauerhaft setzen:
    ```powershell
    setx GEMINI_API_KEY "dein-key-hier"
    ```
-   Danach ein **neues** Terminal oeffnen (setx wirkt nur in neuen Fenstern).
+   Danach ein **neues** Terminal oeffnen (setx wirkt nur in neuen Fenstern;
+   bei VS Code: VS Code komplett neu starten).
+3. Pruefen, ob der Key ankommt (im neuen Terminal):
+   ```powershell
+   echo $env:GEMINI_API_KEY
+   ```
+
+Hinweis: Der kostenlose Tarif erlaubt ca. 10 Anfragen/Minute und ~250/Tag –
+mehr als genug. Bei der Meldung "503 high demand" einfach kurz warten und
+erneut klicken (der Code probiert automatisch Ersatzmodelle).
 
 ---
 
